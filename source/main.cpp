@@ -884,6 +884,7 @@ struct LevelContainer {
     Tex info_tex;
     std::vector<TargetPtr> targetowners;
 
+    static constexpr size_t px_per_frame_scroll = 4;
     static constexpr int min_packs_for_page = 240/30;
     static constexpr size_t scrollbar_fixed_size = 10;
     std::array<Tex, min_packs_for_page + 1> pack_name_texes;
@@ -1601,6 +1602,21 @@ private:
                 }
             }
         }
+        else if(kHeld & KEY_CPAD_UP)
+        {
+            if(pack_selection_offset < px_per_frame_scroll)
+                pack_selection_offset = 0;
+            else
+                pack_selection_offset -= px_per_frame_scroll;
+        }
+        else if(kHeld & KEY_CPAD_DOWN)
+        {
+            auto max_val = get_max_level_scroll_value();
+            if(pack_selection_offset > (max_val - px_per_frame_scroll))
+                pack_selection_offset = max_val;
+            else
+                pack_selection_offset += px_per_frame_scroll;
+        }
         else if(kDown & KEY_DDOWN)
         {
             selected_pack++;
@@ -1669,6 +1685,7 @@ private:
             if(abs(level_selection_offset) == 256 + 32)
             {
                 level_selection_offset = 0;
+                level_selection_direction = 0;
                 level_selection_moving = false;
                 std::swap(level_grid_presented, level_grid_hidden);
             }
@@ -1854,6 +1871,65 @@ private:
                 else if(touch.py >= (bottom_y + start) && touch.py < (bottom_y + end))
                 {
                     playing_bridge_above = !playing_bridge_above;
+                }
+            }
+            else if(!play_scaled)
+            {
+                const auto drawn_w = current_level->get_pixel_width();
+                const auto drawn_h = current_level->get_pixel_height();
+                const auto visible_w = drawn_w > 240 ? 240 : drawn_w;
+                const auto visible_h = drawn_h > 240 ? 240 : drawn_h;
+                auto off_x = (320 - 240)/2;
+                auto off_y = 0;
+
+                if(drawn_w <= 240)
+                    off_x = (320 - drawn_w)/2;
+                if(drawn_h <= 240)
+                    off_y = (240 - drawn_h)/2;
+
+                auto x = touch.px - off_x;
+                auto y = touch.py - off_y;
+                if(x >= 0 && x <= visible_w && y >= 0 && y < visible_h)
+                {
+                    auto square_x = (x + board_offset_x)/16 - (current_level->warp ? 1 : 0);
+                    auto square_y = (y + board_offset_y)/16 - (current_level->warp ? 1 : 0);
+                    if(square_x < 0 || square_y < 0 || square_x >= current_level->width || square_y >= current_level->height) return;
+
+                    size_t new_idx = square_x + square_y * current_level->width;
+                    if(selected_color)
+                    {
+                        if(new_idx == playing_cursor_idx)
+                        {
+                            selected_color = 0;
+                        }
+                        else if(current_level->move_idx_up_checked(playing_cursor_idx) == new_idx)
+                        {
+                            playing_cursor_up();
+                        }
+                        else if(current_level->move_idx_right_checked(playing_cursor_idx) == new_idx)
+                        {
+                            playing_cursor_right();
+                        }
+                        else if(current_level->move_idx_down_checked(playing_cursor_idx) == new_idx)
+                        {
+                            playing_cursor_down();
+                        }
+                        else if(current_level->move_idx_left_checked(playing_cursor_idx) == new_idx)
+                        {
+                            playing_cursor_left();
+                        }
+                    }
+                    else
+                    {
+                        if(new_idx == playing_cursor_idx)
+                        {
+                            select_square();
+                        }
+                        else
+                        {
+                            playing_cursor_idx = new_idx;
+                        }
+                    }
                 }
             }
         }
@@ -2061,10 +2137,16 @@ private:
         constexpr float lr = 50.0f/256.0f;
         constexpr float bt = 40.0f/256.0f;
         C2D_Image img{&level_grid_presented->tex, &subtex};
+        size_t presented_quot = d.quot;
+        if(level_selection_direction != 0)
+            presented_quot += ((level_selection_direction > 0) ? 1 : -1);
+
         for(int y = 0; y < 6; ++y)
         {
             for(int x = 0; x < 5; ++x)
             {
+                if(y * 5 + x + (presented_quot * 30) >= current_pack->count) break;
+
                 const float rx = (320.0f - 250.0f)/2.0f + x * 50.0f + level_selection_offset;
                 const float ry = y * 40.0f;
                 constexpr float rw = 50.0f - 4;
@@ -2098,6 +2180,8 @@ private:
             {
                 for(int x = 0; x < 5; ++x)
                 {
+                    if(size_t(y * 5 + x + (d.quot * 30)) >= current_pack->count) break;
+
                     const float rx = (320.0f - 250.0f)/2.0f + x * 50.0f + ((level_selection_direction > 0) ? (level_selection_offset - (256.0f + 32.0f)) : (level_selection_offset + 256.0f + 32.0f));
                     const float ry = y * 40.0f;
                     constexpr float rw = 50.0f - 4;
