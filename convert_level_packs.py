@@ -1,4 +1,4 @@
-#!/bin/python
+#!/usr/bin/env python
 import os, sys
 import struct
 import zipfile
@@ -145,7 +145,6 @@ def process_level(l, level):
             p2 = p1 + x_dim - 1
             add_direction_cond(p1, DIR_WEST)
             add_direction_cond(p2, DIR_EAST)
-            
 
     print(f"Level curid {level} filid {flevel} size: {x_dim}x{y_dim} colors: {colors_cnt} warp: {warp} bridges: {len(bridges)} walls: {len(walls)} holes: {len(holes)}")
 
@@ -163,9 +162,9 @@ def process_level(l, level):
     out += struct.pack("<4s3B?3I", b"CLFL", x_dim, y_dim, colors_cnt, warp, len(bridges), len(holes), len(walls))
     for b, e in zip(points_begin, points_end):
         out += struct.pack("<2H", b, e)
-    for b in bridges:
+    for b in sorted(bridges):
         out += struct.pack("<H", b)
-    for h in holes:
+    for h in sorted(holes):
         out += struct.pack("<H", h)
     wallsinfo = list(walls.items())
     wallsinfo.sort(key=lambda x: x[0])
