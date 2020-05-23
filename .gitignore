@@ -1,0 +1,7 @@
+.vscode/
+build/
+levels/
+imgs/
+out/
+romfs/
+levels.zip
