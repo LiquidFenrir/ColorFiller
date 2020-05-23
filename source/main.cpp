@@ -1933,6 +1933,54 @@ private:
                 }
             }
         }
+        else if(kHeld & KEY_TOUCH)
+        {
+            const auto drawn_w = current_level->get_pixel_width();
+            const auto drawn_h = current_level->get_pixel_height();
+            const auto visible_w = drawn_w > 240 ? 240 : drawn_w;
+            const auto visible_h = drawn_h > 240 ? 240 : drawn_h;
+            auto off_x = (320 - 240)/2;
+            auto off_y = 0;
+
+            if(drawn_w <= 240)
+                off_x = (320 - drawn_w)/2;
+            if(drawn_h <= 240)
+                off_y = (240 - drawn_h)/2;
+
+            auto x = touch.px - off_x;
+            auto y = touch.py - off_y;
+            if(x >= 0 && x <= visible_w && y >= 0 && y < visible_h)
+            {
+                auto square_x = (x + board_offset_x)/16 - (current_level->warp ? 1 : 0);
+                auto square_y = (y + board_offset_y)/16 - (current_level->warp ? 1 : 0);
+                if(square_x < 0 || square_y < 0 || square_x >= current_level->width || square_y >= current_level->height) return;
+
+                size_t new_idx = square_x + square_y * current_level->width;
+                if(selected_color)
+                {
+                    if(current_level->move_idx_up_checked(playing_cursor_idx) == new_idx)
+                    {
+                        playing_cursor_up();
+                    }
+                    else if(current_level->move_idx_right_checked(playing_cursor_idx) == new_idx)
+                    {
+                        playing_cursor_right();
+                    }
+                    else if(current_level->move_idx_down_checked(playing_cursor_idx) == new_idx)
+                    {
+                        playing_cursor_down();
+                    }
+                    else if(current_level->move_idx_left_checked(playing_cursor_idx) == new_idx)
+                    {
+                        playing_cursor_left();
+                    }
+                }
+                else
+                {
+                    playing_cursor_idx = new_idx;
+                }
+            }
+        }
         else if(kDown & KEY_B) // exit playing mode
         {
             if(selected_color == 0)
