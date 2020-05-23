@@ -138,8 +138,8 @@ struct Config {
     std::string levels_path = "/3ds/ColorFillerLevels.zip";
     std::string save_path = "/3ds/ColorFiller.sav";
     u32 background_color = C2D_Color32(0,0,0,255);
-    u32 highlight_color = C2D_Color32(160,160,160,255);
-    u32 highlight_half_color = C2D_Color32(160,160,160,128);
+    u32 highlight_color = C2D_Color32(192,192,192,255);
+    u32 highlight_half_color = C2D_Color32(192,192,192,128);
     u32 interface_color = C2D_Color32(255,255,255,255);
     static constexpr u32 full_color = C2D_Color32(255,255,255,255);
     static constexpr u32 transparent_color = C2D_Color32(0,0,0,0);
@@ -1204,6 +1204,144 @@ private:
         }
     }
 
+    void playing_cursor_move_either(u16 new_idx, u8 previous_square_going_to, u8 new_square_coming_from, bool vertical)
+    {
+        bool completed_with_this_move = false;
+
+        auto& current_square = current_level->squares[playing_cursor_idx];
+        const u8 bridge_dirs = vertical ? (DIR_NORTH | DIR_SOUTH) : (DIR_EAST | DIR_WEST);
+        const u8 bridge_go_back_dir = vertical ? 0 : (previous_square_going_to == DIR_EAST ? 2 : 1);
+        if(current_square.bridge && (
+            (deleted_connection && !(last_move_direction & bridge_dirs))
+            ||
+            (!deleted_connection && !(last_move_direction & bridge_dirs))
+        ))
+        {
+            return;
+        }
+        else if(
+            (!vertical && current_square.bridge && current_square.bridge_above_conn_count() == 1 && (current_square.bridge_above_direction & bridge_go_back_dir))
+            ||
+            (vertical && current_square.bridge && current_square.connection_count() == 1 && (current_square.direction & previous_square_going_to))
+            ||
+            (!current_square.bridge && current_square.connection_count() == 1 && (current_square.direction & previous_square_going_to))
+        )
+        {
+            current_level->remove_single_connection(playing_cursor_idx, vertical);
+            move_playing_cursor(new_idx, previous_square_going_to);
+            deleted_connection = true;
+            level_data_changed = true;
+            return;
+        }
+
+        auto& next_square = current_level->squares[new_idx];
+        if(next_square.bridge)
+        {
+            // if we got here, then the bridge only has 0 or 1 connections vertically (under)
+            auto connections = vertical ? next_square.connection_count() : next_square.bridge_above_conn_count();
+            if(connections == 1)
+            {
+                if((vertical ? next_square.color : next_square.bridge_above_color) == selected_color)
+                {
+                    // we connect to it and say we're complete
+                    completed_with_this_move = true;
+                }
+                else
+                {
+                    current_level->remove_single_connection(new_idx, vertical);
+                }
+            }
+            else  // 0
+            {
+                // bottom does it
+            }
+        }
+        else if(next_square.color == selected_color)
+        {
+            auto connections = next_square.connection_count();
+            if((connections == 1 && !next_square.is_source()) || (connections == 0 && next_square.is_source()))
+            {
+                // we connect to it and say we're complete
+                completed_with_this_move = true;
+            }
+            else if(connections == 2)
+            {
+                // can't move, it's complete and breaking it might lead to unfun stuff
+                return;
+            }
+        }
+        else if(!next_square.is_source()) // not my color
+        {
+            auto connections = next_square.connection_count();
+            if(connections <= 1)
+            {
+                // not our color, but we can remove it
+                current_level->remove_single_connection(new_idx);
+            }
+            else
+            {
+                // can't move, it's complete and breaking it might lead to unfun stuff
+                return;
+            }
+        }
+        else
+        {
+            return;
+        }
+
+        next_square.add_direction_color(new_square_coming_from, selected_color);
+        current_square.add_direction_color(previous_square_going_to, selected_color);
+        move_playing_cursor(new_idx, previous_square_going_to);
+        level_data_changed = true;
+        if(completed_with_this_move) selected_color = 0;
+    }
+
+    void playing_cursor_horizontal(u16 new_idx, u8 previous_square_going_to, u8 new_square_coming_from)
+    {
+        playing_cursor_move_either(new_idx, previous_square_going_to, new_square_coming_from, false);
+    }
+
+    void playing_cursor_right()
+    {
+        auto new_idx = current_level->move_idx_right_checked(playing_cursor_idx, selected_color != 0);
+        if(new_idx == playing_cursor_idx) return;
+
+        if(selected_color) playing_cursor_horizontal(new_idx, DIR_EAST, DIR_WEST);
+        else move_playing_cursor(new_idx, DIR_EAST);
+    }
+
+    void playing_cursor_left()
+    {
+        auto new_idx = current_level->move_idx_left_checked(playing_cursor_idx, selected_color != 0);
+        if(new_idx == playing_cursor_idx) return;
+
+        if(selected_color) playing_cursor_horizontal(new_idx, DIR_WEST, DIR_EAST);
+        else move_playing_cursor(new_idx, DIR_WEST);
+    }
+
+    void playing_cursor_vertical(u16 new_idx, u8 previous_square_going_to, u8 new_square_coming_from)
+    {
+        playing_cursor_move_either(new_idx, previous_square_going_to, new_square_coming_from, true);
+    }
+
+    void playing_cursor_down()
+    {
+        auto new_idx = current_level->move_idx_down_checked(playing_cursor_idx, selected_color != 0);
+        if(new_idx == playing_cursor_idx) return;
+
+        if(selected_color) playing_cursor_vertical(new_idx, DIR_SOUTH, DIR_NORTH);
+        else move_playing_cursor(new_idx, DIR_SOUTH);
+    }
+
+    void playing_cursor_up()
+    {
+        auto new_idx = current_level->move_idx_up_checked(playing_cursor_idx, selected_color != 0);
+        if(new_idx == playing_cursor_idx) return;
+
+        if(selected_color) playing_cursor_vertical(new_idx, DIR_NORTH, DIR_SOUTH);
+        else move_playing_cursor(new_idx, DIR_NORTH);
+    }
+
     using UpdateImageFPtr = void(LevelContainer::*)();
     using UpdateFPtr = void(LevelContainer::*)(u32,u32,touchPosition,circlePosition);
     using DrawFPtr = void(LevelContainer::*)();
@@ -1752,359 +1890,19 @@ private:
         }
         else if(kDown & KEY_DRIGHT)
         {
-            const auto new_idx = current_level->move_idx_right_checked(playing_cursor_idx, selected_color != 0);
-            if(new_idx == playing_cursor_idx) return;
-
-            if(selected_color)
-            {
-                auto& current_square = current_level->squares[playing_cursor_idx];
-                if(current_square.bridge && (
-                    (deleted_connection && !(last_move_direction & (DIR_EAST | DIR_WEST)))
-                    ||
-                    (!deleted_connection && !(last_move_direction & (DIR_EAST | DIR_WEST)))
-                ))
-                {
-                    return;
-                }
-                else if(selected_color && (
-                    (current_square.bridge && current_square.bridge_above_direction == 2)
-                    ||
-                    (!current_square.bridge && current_square.connection_count() == 1 && current_square.direction & DIR_EAST)
-                ))
-                {
-                    DEBUGPRINT("Deleting conn, going back to right\n");
-                    current_level->remove_single_connection(playing_cursor_idx);
-                    move_playing_cursor(new_idx, DIR_WEST);
-                    deleted_connection = true;
-                    level_data_changed = true;
-                    return;
-                }
-
-                auto& next_square = current_level->squares[new_idx];
-                if(next_square.bridge)
-                {
-                    // special case 
-                    // if we got here, then the bridge only has 0 or 1 connections horizontally (above)
-                    auto connections = next_square.bridge_above_conn_count();
-                    if(connections == 1)
-                    {
-                        if(next_square.bridge_above_color == selected_color)
-                        {
-                            // then we add the new direction to it
-                            next_square.add_direction_color(DIR_WEST, selected_color);
-                            current_square.add_direction_color(DIR_EAST, selected_color);
-                            move_playing_cursor(new_idx, DIR_EAST);
-                            selected_color = 0; // the connection is completed, we're done
-                            level_data_changed = true;
-                        }
-                    }
-                    else  // 0
-                    {
-                        next_square.add_direction_color(DIR_WEST, selected_color);
-                        current_square.add_direction_color(DIR_EAST, selected_color);
-                        move_playing_cursor(new_idx, DIR_EAST);
-                        level_data_changed = true;
-                    }
-                }
-                else if(next_square.color == selected_color)
-                {
-                    auto connections = next_square.connection_count();
-                    if((connections == 1 && !next_square.is_source()) || (connections == 0 && next_square.is_source()))
-                    {
-                        // we connect to it and say we're complete
-                        next_square.add_direction_color(DIR_WEST, selected_color);
-                        current_square.add_direction_color(DIR_EAST, selected_color);
-                        move_playing_cursor(new_idx, DIR_EAST);
-                        selected_color = 0;
-                        level_data_changed = true;
-                    }
-                    else if(connections == 2)
-                    {
-                        // can't move, it's complete and breaking it might lead to unfun stuff
-                    }
-                }
-                else if(!next_square.is_source()) // not my color
-                {
-                    auto connections = next_square.connection_count();
-                    if(connections <= 1)
-                    {
-                        current_level->remove_single_connection(new_idx);
-                        next_square.add_direction_color(DIR_WEST, selected_color);
-                        current_square.add_direction_color(DIR_EAST, selected_color);
-                        move_playing_cursor(new_idx, DIR_EAST);
-                        level_data_changed = true;
-                    }
-                }
-            }
-            else
-            {
-                move_playing_cursor(new_idx, DIR_EAST);
-            }
+            playing_cursor_right();
         }
         else if(kDown & KEY_DLEFT)
         {
-            auto new_idx = current_level->move_idx_left_checked(playing_cursor_idx, selected_color != 0);
-            if(new_idx == playing_cursor_idx) return;
-    
-            if(selected_color)
-            {
-                auto& current_square = current_level->squares[playing_cursor_idx];
-                if(current_square.bridge && (
-                    (deleted_connection && !(last_move_direction & (DIR_EAST | DIR_WEST)))
-                    ||
-                    (!deleted_connection && !(last_move_direction & (DIR_EAST | DIR_WEST)))
-                ))
-                {
-                    return;
-                }
-                else if(selected_color && (
-                    (current_square.bridge && current_square.bridge_above_direction == 1)
-                    ||
-                    (!current_square.bridge && current_square.connection_count() == 1 && current_square.direction & DIR_WEST)
-                ))
-                {
-                    DEBUGPRINT("Deleting conn, going back to left\n");
-                    current_level->remove_single_connection(playing_cursor_idx);
-                    move_playing_cursor(new_idx, DIR_EAST);
-                    deleted_connection = true;
-                    level_data_changed = true;
-                    return;
-                }
-
-                auto& next_square = current_level->squares[new_idx];
-                if(next_square.bridge)
-                {
-                    // special case 
-                    // if we got here, then the bridge only has 0 or 1 connections horizontally (above)
-                    auto connections = next_square.bridge_above_conn_count();
-                    if(connections == 1)
-                    {
-                        if(next_square.bridge_above_color == selected_color)
-                        {
-                            // then we add the new direction to it
-                            next_square.add_direction_color(DIR_EAST, selected_color);
-                            current_square.add_direction_color(DIR_WEST, selected_color);
-                            move_playing_cursor(new_idx, DIR_WEST);
-                            selected_color = 0; // the connection is completed, we're done
-                            level_data_changed = true;
-                        }
-                    }
-                    else  // 0
-                    {
-                        next_square.add_direction_color(DIR_EAST, selected_color);
-                        current_square.add_direction_color(DIR_WEST, selected_color);
-                        move_playing_cursor(new_idx, DIR_WEST);
-                        level_data_changed = true;
-                    }
-                }
-                else if(next_square.color == selected_color)
-                {
-                    auto connections = next_square.connection_count();
-                    if((connections == 1 && !next_square.is_source()) || (connections == 0 && next_square.is_source()))
-                    {
-                        // we connect to it and say we're complete
-                        next_square.add_direction_color(DIR_EAST, selected_color);
-                        current_square.add_direction_color(DIR_WEST, selected_color);
-                        move_playing_cursor(new_idx, DIR_WEST);
-                        selected_color = 0;
-                        level_data_changed = true;
-                    }
-                    else if(connections == 2)
-                    {
-                        // can't move, it's complete and breaking it might lead to unfun stuff
-                    }
-                }
-                else if(!next_square.is_source()) // not my color
-                {
-                    auto connections = next_square.connection_count();
-                    if(connections <= 1)
-                    {
-                        current_level->remove_single_connection(new_idx);
-                        next_square.add_direction_color(DIR_EAST, selected_color);
-                        current_square.add_direction_color(DIR_WEST, selected_color);
-                        move_playing_cursor(new_idx, DIR_WEST);
-                        level_data_changed = true;
-                    }
-                }
-            }
-            else
-            {
-                move_playing_cursor(new_idx, DIR_WEST);
-            }
+            playing_cursor_left();
         }
         else if(kDown & KEY_DDOWN)
         {
-            auto new_idx = current_level->move_idx_down_checked(playing_cursor_idx, selected_color != 0);
-            if(new_idx == playing_cursor_idx) return;
-
-            if(selected_color)
-            {
-                auto& current_square = current_level->squares[playing_cursor_idx];
-                if(current_square.bridge && (
-                    (deleted_connection && !(last_move_direction & (DIR_NORTH | DIR_SOUTH)))
-                    ||
-                    (!deleted_connection && !(last_move_direction & (DIR_NORTH | DIR_SOUTH)))
-                ))
-                {
-                    return;
-                }
-                else if(selected_color && current_square.connection_count() == 1 && current_square.direction & DIR_SOUTH)
-                {
-                    DEBUGPRINT("Deleting conn, going back to down\n");
-                    current_level->remove_single_connection(playing_cursor_idx, true);
-                    move_playing_cursor(new_idx, DIR_SOUTH);
-                    deleted_connection = true;
-                    level_data_changed = true;
-                    return;
-                }
-
-                auto& next_square = current_level->squares[new_idx];
-                if(next_square.bridge)
-                {
-                    // special case 
-                    // if we got here, then the bridge only has 0 or 1 connections vertically (under)
-                    auto connections = next_square.connection_count();
-                    if(connections == 1)
-                    {
-                        if(next_square.color == selected_color)
-                        {
-                            // then we add the new direction to it
-                            next_square.add_direction_color(DIR_NORTH, selected_color);
-                            current_square.add_direction_color(DIR_SOUTH, selected_color);
-                            move_playing_cursor(new_idx, DIR_SOUTH);
-                            selected_color = 0; // the connection is completed, we're done
-                            level_data_changed = true;
-                        }
-                    }
-                    else  // 0
-                    {
-                        next_square.add_direction_color(DIR_NORTH, selected_color);
-                        current_square.add_direction_color(DIR_SOUTH, selected_color);
-                        move_playing_cursor(new_idx, DIR_SOUTH);
-                        level_data_changed = true;
-                    }
-                }
-                else if(next_square.color == selected_color)
-                {
-                    auto connections = next_square.connection_count();
-                    if((connections == 1 && !next_square.is_source()) || (connections == 0 && next_square.is_source()))
-                    {
-                        // we connect to it and say we're complete
-                        next_square.add_direction_color(DIR_NORTH, selected_color);
-                        current_square.add_direction_color(DIR_SOUTH, selected_color);
-                        move_playing_cursor(new_idx, DIR_SOUTH);
-                        selected_color = 0;
-                        level_data_changed = true;
-                    }
-                    else if(connections == 2)
-                    {
-                        // can't move, it's complete and breaking it might lead to unfun stuff
-                    }
-                }
-                else if(!next_square.is_source()) // not my color
-                {
-                    auto connections = next_square.connection_count();
-                    if(connections <= 1)
-                    {
-                        current_level->remove_single_connection(new_idx);
-                        next_square.add_direction_color(DIR_NORTH, selected_color);
-                        current_square.add_direction_color(DIR_SOUTH, selected_color);
-                        move_playing_cursor(new_idx, DIR_SOUTH);
-                        level_data_changed = true;
-                    }
-                }
-            }
-            else
-            {
-                move_playing_cursor(new_idx, DIR_SOUTH);
-            }
+            playing_cursor_down();
         }
         else if(kDown & KEY_DUP)
         {
-            auto new_idx = current_level->move_idx_up_checked(playing_cursor_idx, selected_color != 0);
-            if(new_idx == playing_cursor_idx) return;
-
-            if(selected_color)
-            {
-                auto& current_square = current_level->squares[playing_cursor_idx];
-                if(current_square.bridge && (
-                    (deleted_connection && !(last_move_direction & (DIR_NORTH | DIR_SOUTH)))
-                    ||
-                    (!deleted_connection && !(last_move_direction & (DIR_NORTH | DIR_SOUTH)))
-                ))
-                {
-                    return;
-                }
-                else if(selected_color && current_square.connection_count() == 1 && current_square.direction & DIR_NORTH)
-                {
-                    DEBUGPRINT("Deleting conn, going back to up\n");
-                    current_level->remove_single_connection(playing_cursor_idx, true);
-                    move_playing_cursor(new_idx, DIR_NORTH);
-                    deleted_connection = true;
-                    level_data_changed = true;
-                    return;
-                }
-
-                auto& next_square = current_level->squares[new_idx];
-                if(next_square.bridge)
-                {
-                    // special case 
-                    // if we got here, then the bridge only has 0 or 1 connections vertically (under)
-                    auto connections = next_square.connection_count();
-                    if(connections == 1)
-                    {
-                        if(next_square.color == selected_color)
-                        {
-                            // then we add the new direction to it
-                            next_square.add_direction_color(DIR_SOUTH, selected_color);
-                            current_square.add_direction_color(DIR_NORTH, selected_color);
-                            move_playing_cursor(new_idx, DIR_NORTH);
-                            selected_color = 0; // the connection is completed, we're done
-                            level_data_changed = true;
-                        }
-                    }
-                    else  // 0
-                    {
-                        next_square.add_direction_color(DIR_SOUTH, selected_color);
-                        current_square.add_direction_color(DIR_NORTH, selected_color);
-                        move_playing_cursor(new_idx, DIR_NORTH);
-                        level_data_changed = true;
-                    }
-                }
-                else if(next_square.color == selected_color)
-                {
-                    auto connections = next_square.connection_count();
-                    if((connections == 1 && !next_square.is_source()) || (connections == 0 && next_square.is_source()))
-                    {
-                        // we connect to it and say we're complete
-                        next_square.add_direction_color(DIR_SOUTH, selected_color);
-                        current_square.add_direction_color(DIR_NORTH, selected_color);
-                        move_playing_cursor(new_idx, DIR_NORTH);
-                        selected_color = 0;
-                        level_data_changed = true;
-                    }
-                    else if(connections == 2)
-                    {
-                        // can't move, it's complete and breaking it might lead to unfun stuff
-                    }
-                }
-                else if(!next_square.is_source()) // not my color
-                {
-                    auto connections = next_square.connection_count();
-                    if(connections <= 1)
-                    {
-                        current_level->remove_single_connection(new_idx);
-                        next_square.add_direction_color(DIR_SOUTH, selected_color);
-                        current_square.add_direction_color(DIR_NORTH, selected_color);
-                        move_playing_cursor(new_idx, DIR_NORTH);
-                        level_data_changed = true;
-                    }
-                }
-            }
-            else
-            {
-                move_playing_cursor(new_idx, DIR_NORTH);
-            }
+            playing_cursor_up();
         }
     }
 
