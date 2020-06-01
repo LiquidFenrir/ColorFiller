@@ -45,12 +45,15 @@ using TargetPtr = std::unique_ptr<C3D_RenderTarget, TargetCloser>;
 
 struct Tex {
     C3D_Tex tex;
+    TargetPtr target;
     bool inited = false;
+    bool drawn = false;
     void create(u16 w, u16 h)
     {
         if(inited) return;
 
-        C3D_TexInit(&tex, w, h, GPU_RGBA8);
+        C3D_TexInitVRAM(&tex, w, h, GPU_RGBA8);
+        target.reset(C3D_RenderTargetCreateFromTex(&tex, GPU_TEXFACE_2D, 0, -1));
         inited = true;
     }
     void clear()
@@ -58,18 +61,13 @@ struct Tex {
         if(!inited) return;
 
         C3D_TexDelete(&tex);
+        target = nullptr;
         inited = false;
+        drawn = false;
     }
     ~Tex()
     {
         clear();
-    }
-    
-    TargetPtr make_target()
-    {
-        if(!inited) return nullptr;
-
-        return TargetPtr(C3D_RenderTargetCreateFromTex(&tex, GPU_TEXFACE_2D, 0, -1));
     }
 };
 
@@ -882,7 +880,6 @@ struct LevelContainer {
     Mode current_mode = Mode::NoFile;
     int framectr = 0;
     Tex info_tex;
-    std::vector<TargetPtr> targetowners;
 
     static constexpr size_t px_per_frame_scroll = 4;
     static constexpr int min_packs_for_page = 240/30;
@@ -930,6 +927,12 @@ struct LevelContainer {
     {
         tints.set(c);
         level_imgs.set(s);
+        info_tex.create(512,256);
+        drawn_level_board.create(512, 512);
+        for(auto& t : level_grid_texes)
+            t.create(256,256);
+        for(auto& t : pack_name_texes)
+            t.create(256,32);
     }
 
     size_t pack_count() const
@@ -1031,6 +1034,7 @@ struct LevelContainer {
 
     void update_images()
     {
+        // first thing these should do, if anything, is clear all the targets the use
         (this->*(update_images_funcs[static_cast<int>(current_mode)]))();
     }
 
@@ -1043,8 +1047,6 @@ struct LevelContainer {
         circlePosition circle;
         hidCircleRead(&circle);
         
-        targetowners.clear();
-
         (this->*(update_funcs[static_cast<int>(current_mode)]))(kDown, kHeld, touch, circle);
         if(++framectr == 60)
         {
@@ -1349,15 +1351,16 @@ private:
 
     void update_images_no_file()
     {
-        if(!info_tex.inited)
+        if(!info_tex.drawn)
         {
-            info_tex.create(512,256);
-            targetowners.push_back(info_tex.make_target());
-            auto target = targetowners.back().get();
+            auto target = info_tex.target.get();
+
             C2D_TargetClear(target, Config::transparent_color);
-            C2D_SceneBegin(target);
-            C2D_Text txt1, txt2;
             C2D_TextBufClear(textbuf);
+
+            C2D_SceneBegin(target);
+
+            C2D_Text txt1, txt2;
             C2D_TextParse(&txt1, textbuf, "No levels file found.");
             C2D_TextParse(&txt2, textbuf, "Press \uE001 to exit.");
             C2D_TextOptimize(&txt1);
@@ -1369,19 +1372,23 @@ private:
             const float y = (240.0f - (h1 + 2.0f + h2))/2.0f;
             C2D_DrawText(&txt1, C2D_WithColor, (512.0f - w1)/2.0f, y, 0.5f, 1.0f, 1.0f, Config::full_color);
             C2D_DrawText(&txt2, C2D_WithColor, (512.0f - w2)/2.0f, y + h1 + 2.0f, 0.5f, 1.0f, 1.0f, Config::full_color);
+
+            info_tex.drawn = true;
         }
     }
     void update_images_error_loading()
     {
-        if(!info_tex.inited)
+        if(!info_tex.drawn)
         {
-            info_tex.create(512,256);
-            targetowners.push_back(info_tex.make_target());
-            auto target = targetowners.back().get();
+            auto target = info_tex.target.get();
+
             C2D_TargetClear(target, Config::transparent_color);
-            C2D_SceneBegin(target);
-            C2D_Text txt1, txt2;
             C2D_TextBufClear(textbuf);
+
+            C2D_SceneBegin(target);
+
+            C2D_Text txt1, txt2;
+
             C2D_TextParse(&txt1, textbuf, "An error occured when loading levels.");
             C2D_TextParse(&txt2, textbuf, "Press \uE001 to exit.");
             C2D_TextOptimize(&txt1);
@@ -1397,9 +1404,30 @@ private:
     }
     void update_images_select_pack()
     {
-        C2D_TextBufClear(textbuf);
         static size_t old_idx = SIZE_MAX;
         size_t cur_idx = pack_selection_offset/30;
+
+        C2D_TextBufClear(textbuf);
+        if(old_idx != cur_idx)
+        {
+            size_t i = cur_idx;
+            for(auto& t : pack_name_texes)
+            {
+                if(i >= pack_count()) break;
+
+                auto target = t.target.get();
+                C2D_TargetClear(target, Config::transparent_color);
+
+                i++;
+            }
+
+            if(!info_tex.drawn)
+            {
+                auto target = info_tex.target.get();
+                C2D_TargetClear(target, Config::transparent_color);
+            }
+        }
+
         if(old_idx != cur_idx)
         {
             old_idx = cur_idx;
@@ -1407,12 +1435,8 @@ private:
             {
                 if(cur_idx >= pack_count()) break;
 
-                t.create(256, 32);
+                auto target = t.target.get();
 
-                targetowners.push_back(t.make_target());
-                auto target = targetowners.back().get();
-
-                C2D_TargetClear(target, Config::transparent_color);
                 C2D_SceneBegin(target);
                 C2D_Text txt;
                 std::string* name = &names[cur_idx];
@@ -1431,16 +1455,13 @@ private:
         }
 
         static constexpr float txt_scale = 0.875f;
-        if(!info_tex.inited)
+        if(!info_tex.drawn)
         {
-            info_tex.create(512,256);
-            targetowners.push_back(info_tex.make_target());
-            auto target = targetowners.back().get();
+            auto target = info_tex.target.get();
 
-            C2D_TargetClear(target, Config::transparent_color);
             C2D_SceneBegin(target);
             C2D_Text txt1, txt2, txt3;
-            C2D_TextBufClear(textbuf);
+
             C2D_TextParse(&txt1, textbuf, "Welcome to ColorFiller!");
             C2D_TextParse(&txt2, textbuf, "select a pack to play!");
             C2D_TextParse(&txt3, textbuf, "\uE001 exit - \uE000 pick - \uE006 move");
@@ -1463,14 +1484,19 @@ private:
     {
         C2D_TextBufClear(textbuf);
 
+        if(old_selected_level != selected_level)
+        {
+            auto target = drawn_level_board.target.get();
+            C2D_TargetClear(target, Config::transparent_color);
+        }
+
         if(level_grid_presented == nullptr)
         {
             level_grid_presented = &level_grid_texes[0];
-            level_grid_presented->create(256,256);
-            targetowners.push_back(level_grid_presented->make_target());
-            auto target = targetowners.back().get();
+            auto target = level_grid_presented->target.get();
 
             C2D_TargetClear(target, Config::transparent_color);
+
             C2D_SceneBegin(target);
 
             C2D_Text txt;
@@ -1498,11 +1524,10 @@ private:
                 level_grid_hidden = &level_grid_texes[1];
             else
                 level_grid_hidden = &level_grid_texes[0];
-            level_grid_hidden->create(256,256);
-            targetowners.push_back(level_grid_hidden->make_target());
-            auto target = targetowners.back().get();
+            auto target = level_grid_hidden->target.get();
 
             C2D_TargetClear(target, Config::transparent_color);
+
             C2D_SceneBegin(target);
 
             C2D_Text txt;
@@ -1528,11 +1553,10 @@ private:
         if(old_selected_level != selected_level)
         {
             old_selected_level = selected_level;
-            drawn_level_board.create(512, 512);
-            targetowners.push_back(drawn_level_board.make_target());
-            auto target = targetowners.back().get();
-            C2D_TargetClear(target, Config::transparent_color);
+            auto target = drawn_level_board.target.get();
+            
             C2D_SceneBegin(target);
+            
             auto& l = (*current_pack)[selected_level];
             l.draw(tints, level_imgs);
         }
@@ -1543,9 +1567,8 @@ private:
         {
             played_any = true;
             level_data_changed = false;
-            drawn_level_board.create(512, 512);
-            targetowners.push_back(drawn_level_board.make_target());
-            auto target = targetowners.back().get();
+            auto target = drawn_level_board.target.get();
+
             C2D_TargetClear(target, Config::transparent_color);
             C2D_SceneBegin(target);
             current_level->draw(tints, level_imgs);
@@ -2446,40 +2469,49 @@ int main(int argc, char* argv[])
 
     C2D_TextBuf textbuf = C2D_TextBufNew(1024);
     Config configuration;
-    LevelContainer levels(configuration, spritesheet, textbuf);
-    get_levels(levels);
-    levels.load_save();
-    DEBUGPRINT("level count: %zd\n", levels.levels.size());
 
-    // Main loop
-    while (aptMainLoop() && levels.keepgoing)
-    {
-        hidScanInput();
+    { // Scope for automatic deletion of LevelContainer rendertargets before citro deinit
+        LevelContainer levels(configuration, spritesheet, textbuf);
+        get_levels(levels);
+        levels.load_save();
+        DEBUGPRINT("level count: %zd\n", levels.levels.size());
 
-        // Respond to user input
-        levels.update();
+        // Main loop
+        while (aptMainLoop() && levels.keepgoing)
+        {
+            hidScanInput();
 
-        // Render the scene
-        C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
-        levels.update_images();
+            // Respond to user input
+            levels.update();
 
-        C2D_TargetClear(top, configuration.background_color);
-        C2D_SceneBegin(top);
+            // Render the scene
+            C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
 
-        levels.draw_top();
+            // clear first
+            C2D_TargetClear(top, configuration.background_color);
+            C2D_TargetClear(bot, configuration.background_color);
 
-        C2D_TargetClear(bot, configuration.background_color);
-        C2D_SceneBegin(bot);
+            levels.update_images();
 
-        levels.draw_bottom();
+            // draw after
 
-        C3D_FrameEnd(0);
+            C2D_SceneBegin(top);
+
+            levels.draw_top();
+
+            C2D_SceneBegin(bot);
+
+            levels.draw_bottom();
+
+            C3D_FrameEnd(0);
+        }
+
+        if(levels.played_any)
+        {
+            levels.save();
+        }
     }
 
-    if(levels.played_any)
-    {
-        levels.save();
-    }
     if(configuration.changed)
     {
         configuration.save_config();
